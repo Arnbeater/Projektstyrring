@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
-import { getFirestore, doc, setDoc, onSnapshot } from "firebase/firestore";
+import { getFirestore, doc, setDoc, onSnapshot, collection, addDoc, deleteDoc, getDocs, query, orderBy } from "firebase/firestore";
 
 // ============================================================
 // 🔧 FIREBASE CONFIG
@@ -160,7 +160,7 @@ function useDemoMode() {
 }
 
 // ============================================================
-// MAIN APP
+// MAIN APP — Multi-project wrapper
 // ============================================================
 export default function App() {
   const [user, setUser] = useState(null);
@@ -169,74 +169,52 @@ export default function App() {
   const [loginLoading, setLoginLoading] = useState(false);
   const isDemo = useDemoMode();
 
-  // Project state
-  const [projectName, setProjectName] = useState("Nyt Projekt");
-  const [tasks, setTasks] = useState([]);
-  const [milestones, setMilestones] = useState([]);
-  const [view, setView] = useState("gantt");
-  const [selTask, setSelTask] = useState(null);
-  const [selMs, setSelMs] = useState(null);
-  const [showAddTask, setShowAddTask] = useState(false);
-  const [showAddMs, setShowAddMs] = useState(false);
-  const [onlineUsers, setOnlineUsers] = useState([]);
+  // Multi-project state
+  const [projects, setProjects] = useState([]);
+  const [activeProjectId, setActiveProjectId] = useState(null);
+  const [showNewProject, setShowNewProject] = useState(false);
 
-  // Init Firebase or demo mode
+  // Init auth
   useEffect(() => {
     if (isDemo) {
-      // Demo mode: load from localStorage
-      try {
-        const d = JSON.parse(localStorage.getItem("pm4"));
-        if (d) { setProjectName(d.p || "Nyt Projekt"); setTasks(d.t || []); setMilestones(d.m || []); }
-      } catch(e) {}
       setUser({ email: "demo@lokal", displayName: "Demo (lokal)" });
       setAuthLoading(false);
       return;
     }
-
-    // Direct Firebase auth listener
     const unsub = onAuthStateChanged(fbAuth, u => {
       setUser(u);
       setAuthLoading(false);
-      if (u) loadProjectData();
     });
     return () => unsub();
   }, []);
 
-  // Save to localStorage in demo mode
+  // Load projects list
+  useEffect(() => {
+    if (!user || isDemo) return;
+    const q = query(collection(fbDb, "projects"), orderBy("createdAt", "desc"));
+    const unsub = onSnapshot(q, snap => {
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setProjects(list);
+    });
+    return () => unsub();
+  }, [user, isDemo]);
+
+  // Demo mode: load from localStorage
   useEffect(() => {
     if (isDemo && user) {
-      try { localStorage.setItem("pm4", JSON.stringify({ p: projectName, t: tasks, m: milestones })); } catch(e) {}
+      try {
+        const d = JSON.parse(localStorage.getItem("pm5_projects"));
+        if (d) setProjects(d);
+      } catch(e) {}
     }
-  }, [tasks, milestones, projectName, isDemo, user]);
+  }, [isDemo, user]);
 
-  // Firestore: load project data
-  async function loadProjectData() {
-    if (isDemo) return;
-    const ref = doc(fbDb, "projects", "main");
-    onSnapshot(ref, snap => {
-      if (snap.exists()) {
-        const data = snap.data();
-        setProjectName(data.projectName || "Nyt Projekt");
-        setTasks(data.tasks || []);
-        setMilestones(data.milestones || []);
-      }
-    });
-  }
+  useEffect(() => {
+    if (isDemo && user && projects.length > 0) {
+      try { localStorage.setItem("pm5_projects", JSON.stringify(projects)); } catch(e) {}
+    }
+  }, [projects, isDemo, user]);
 
-  // Firestore: save project data
-  async function saveToFirestore(newTasks, newMilestones, newName) {
-    if (isDemo) return;
-    const ref = doc(fbDb, "projects", "main");
-    await setDoc(ref, {
-      projectName: newName ?? projectName,
-      tasks: newTasks ?? tasks,
-      milestones: newMilestones ?? milestones,
-      updatedAt: new Date().toISOString(),
-      updatedBy: user?.email || "unknown"
-    }, { merge: true });
-  }
-
-  // Auth actions
   async function handleLogin(email, pass) {
     if (isDemo) { setUser({ email, displayName: email }); return; }
     setLoginLoading(true); setAuthError("");
@@ -256,28 +234,239 @@ export default function App() {
   }
 
   async function handleLogout() {
-    if (isDemo) { setUser(null); return; }
+    if (isDemo) { setUser(null); setActiveProjectId(null); return; }
     await signOut(fbAuth);
+    setActiveProjectId(null);
   }
 
-  // Task/milestone CRUD
+  async function createProject(name) {
+    const proj = {
+      projectName: name || "Nyt Projekt",
+      tasks: [],
+      milestones: [],
+      createdAt: new Date().toISOString(),
+      createdBy: user?.email || "",
+      updatedAt: new Date().toISOString(),
+      updatedBy: user?.email || ""
+    };
+    if (isDemo) {
+      const id = "p" + Date.now();
+      setProjects(prev => [{ id, ...proj }, ...prev]);
+      setActiveProjectId(id);
+    } else {
+      const ref = await addDoc(collection(fbDb, "projects"), proj);
+      setActiveProjectId(ref.id);
+    }
+    setShowNewProject(false);
+  }
+
+  async function deleteProject(id) {
+    if (isDemo) {
+      setProjects(prev => prev.filter(p => p.id !== id));
+    } else {
+      await deleteDoc(doc(fbDb, "projects", id));
+    }
+    if (activeProjectId === id) setActiveProjectId(null);
+  }
+
+  // Loading
+  if (authLoading) return (
+    <div style={{ minHeight:"100vh", background:"#0F1117", display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <style>{css}</style>
+      <div style={{ textAlign:"center" }}>
+        <div style={{ fontSize:32, fontFamily:"var(--font-mono)", fontWeight:700, color:"#FF6B35", animation:"pulse 1.5s infinite" }}>PM</div>
+        <div style={{ fontSize:12, color:"#6B7089", marginTop:8 }}>Indlæser...</div>
+      </div>
+    </div>
+  );
+
+  // Login
+  if (!user) return <LoginScreen onLogin={handleLogin} error={authError} loading={loginLoading} />;
+
+  // Project view
+  if (activeProjectId) {
+    return <ProjectView
+      projectId={activeProjectId}
+      user={user}
+      isDemo={isDemo}
+      projects={projects}
+      setProjects={setProjects}
+      onBack={() => { setActiveProjectId(null); }}
+      onLogout={handleLogout}
+    />;
+  }
+
+  // Project list
+  return (
+    <div style={{ minHeight:"100vh", background:"var(--bg)", fontFamily:"var(--font-display)" }}>
+      <style>{css}</style>
+      <div style={{ maxWidth:900, margin:"0 auto", padding:"40px 24px" }}>
+        {/* Header */}
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:32 }}>
+          <div>
+            <div style={{ fontFamily:"var(--font-mono)", fontSize:10, fontWeight:700, letterSpacing:"0.2em", textTransform:"uppercase", color:"var(--accent)", marginBottom:6 }}>Projektstyring</div>
+            <h1 style={{ fontSize:28, fontWeight:600, letterSpacing:"-0.02em" }}>Dine projekter</h1>
+          </div>
+          <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+            <div style={{ width:28, height:28, borderRadius:6, background:"var(--surface3)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:600, color:"var(--accent)" }}>
+              {(user.email || "?")[0].toUpperCase()}
+            </div>
+            <span style={{ fontSize:11, color:"var(--text-muted)" }}>{user.email}</span>
+            <button className="btn btn-dark btn-sm" onClick={handleLogout}>Log ud</button>
+          </div>
+        </div>
+
+        {isDemo && (
+          <div style={{ marginBottom:20, padding:"8px 14px", background:"rgba(245,197,66,0.1)", border:"1px solid rgba(245,197,66,0.2)", borderRadius:8, fontSize:11, color:"var(--yellow)" }}>
+            ⚠ Demo-tilstand: Data gemmes kun lokalt.
+          </div>
+        )}
+
+        {/* New project button */}
+        <button className="btn btn-accent" style={{ marginBottom:24, padding:"10px 20px", fontSize:14 }} onClick={() => setShowNewProject(true)}>
+          + Nyt projekt
+        </button>
+
+        {/* Project cards */}
+        {projects.length === 0 ? (
+          <Empty icon="📁" title="Ingen projekter endnu" sub="Opret dit første projekt for at komme i gang" />
+        ) : (
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(280px, 1fr))", gap:12 }}>
+            {projects.map(p => {
+              const taskCount = (p.tasks || []).length;
+              const doneCount = (p.tasks || []).filter(t => t.status === "Afsluttet").length;
+              const msCount = (p.milestones || []).length;
+              const pct = taskCount > 0 ? Math.round(doneCount / taskCount * 100) : 0;
+              return (
+                <div key={p.id} onClick={() => setActiveProjectId(p.id)}
+                  style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12, padding:20, cursor:"pointer", transition:"all 0.15s", position:"relative" }}
+                  onMouseEnter={e => e.currentTarget.style.borderColor = "var(--border-light)"}
+                  onMouseLeave={e => e.currentTarget.style.borderColor = "var(--border)"}>
+                  <div style={{ fontSize:16, fontWeight:600, marginBottom:6 }}>{p.projectName || "Uden navn"}</div>
+                  <div style={{ fontSize:11, color:"var(--text-muted)", marginBottom:12 }}>
+                    {taskCount} opgave{taskCount !== 1 ? "r" : ""} · {msCount} milepæl{msCount !== 1 ? "e" : ""}
+                    {p.createdBy && <> · af {p.createdBy}</>}
+                  </div>
+                  {taskCount > 0 && (
+                    <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+                      <div style={{ flex:1, height:4, background:"var(--surface3)", borderRadius:2, overflow:"hidden" }}>
+                        <div style={{ width:`${pct}%`, height:"100%", background:"var(--accent)", borderRadius:2, transition:"width 0.3s" }} />
+                      </div>
+                      <span style={{ fontFamily:"var(--font-mono)", fontSize:10, color:"var(--accent)", fontWeight:600 }}>{pct}%</span>
+                    </div>
+                  )}
+                  <div style={{ fontSize:10, color:"var(--text-dim)", fontFamily:"var(--font-mono)" }}>
+                    Opdateret {p.updatedAt ? new Date(p.updatedAt).toLocaleDateString("da-DK") : "—"}
+                  </div>
+                  <button className="btn btn-danger btn-sm" onClick={e => { e.stopPropagation(); if(confirm("Slet dette projekt?")) deleteProject(p.id); }}
+                    style={{ position:"absolute", top:12, right:12, fontSize:10, padding:"2px 8px" }}>✕</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* New project modal */}
+      {showNewProject && <NewProjectModal onCreate={createProject} onClose={() => setShowNewProject(false)} />}
+    </div>
+  );
+}
+
+// ============================================================
+// NEW PROJECT MODAL
+// ============================================================
+function NewProjectModal({ onCreate, onClose }) {
+  const [name, setName] = useState("");
+  const ref = useRef(null);
+  useEffect(() => { ref.current?.focus(); }, []);
+  return (
+    <div onClick={e => e.target === e.currentTarget && onClose()} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:200 }}>
+      <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12, padding:24, width:420, maxWidth:"90vw", boxShadow:"0 4px 24px rgba(0,0,0,0.3)", animation:"slideUp 0.2s ease" }}>
+        <div style={{ fontSize:18, fontWeight:600, marginBottom:16 }}>Nyt projekt</div>
+        <Field label="Projektnavn">
+          <input ref={ref} className="fl-input" value={name} onChange={e => setName(e.target.value)} placeholder="Hvad hedder projektet?"
+            onKeyDown={e => e.key === "Enter" && onCreate(name)} />
+        </Field>
+        <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:8 }}>
+          <button className="btn btn-dark" onClick={onClose}>Annuller</button>
+          <button className="btn btn-accent" onClick={() => onCreate(name)}>Opret</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// PROJECT VIEW — Single project (existing logic)
+// ============================================================
+function ProjectView({ projectId, user, isDemo, projects, setProjects, onBack, onLogout }) {
+  const [projectName, setProjectName] = useState("Nyt Projekt");
+  const [tasks, setTasks] = useState([]);
+  const [milestones, setMilestones] = useState([]);
+  const [view, setView] = useState("gantt");
+  const [selTask, setSelTask] = useState(null);
+  const [selMs, setSelMs] = useState(null);
+  const [showAddTask, setShowAddTask] = useState(false);
+  const [showAddMs, setShowAddMs] = useState(false);
+
+  // Load project data
+  useEffect(() => {
+    if (isDemo) {
+      const p = projects.find(x => x.id === projectId);
+      if (p) {
+        setProjectName(p.projectName || "Nyt Projekt");
+        setTasks(p.tasks || []);
+        setMilestones(p.milestones || []);
+      }
+      return;
+    }
+    const ref = doc(fbDb, "projects", projectId);
+    const unsub = onSnapshot(ref, snap => {
+      if (snap.exists()) {
+        const data = snap.data();
+        setProjectName(data.projectName || "Nyt Projekt");
+        setTasks(data.tasks || []);
+        setMilestones(data.milestones || []);
+      }
+    });
+    return () => unsub();
+  }, [projectId]);
+
+  // Save
+  async function saveProject(newTasks, newMilestones, newName) {
+    const data = {
+      projectName: newName ?? projectName,
+      tasks: newTasks ?? tasks,
+      milestones: newMilestones ?? milestones,
+      updatedAt: new Date().toISOString(),
+      updatedBy: user?.email || "unknown"
+    };
+    if (isDemo) {
+      setProjects(prev => prev.map(p => p.id === projectId ? { ...p, ...data } : p));
+    } else {
+      const ref = doc(fbDb, "projects", projectId);
+      await setDoc(ref, data, { merge: true });
+    }
+  }
+
   function updateTasks(fn) {
     setTasks(prev => {
       const next = typeof fn === "function" ? fn(prev) : fn;
-      saveToFirestore(next, null, null);
+      saveProject(next, null, null);
       return next;
     });
   }
   function updateMilestones(fn) {
     setMilestones(prev => {
       const next = typeof fn === "function" ? fn(prev) : fn;
-      saveToFirestore(null, next, null);
+      saveProject(null, next, null);
       return next;
     });
   }
   function updateProjectName(name) {
     setProjectName(name);
-    saveToFirestore(null, null, name);
+    saveProject(null, null, name);
   }
 
   function addTask(name, start, end, desc) {
@@ -288,45 +477,35 @@ export default function App() {
     }]);
     setShowAddTask(false);
   }
-
   function updTask(id, field, value) {
     updateTasks(prev => prev.map(t => t.id === id ? { ...t, [field]: value } : t));
   }
-
   function delTask(id) {
     updateTasks(prev => prev.filter(t => t.id !== id));
     setSelTask(null);
   }
-
   function addMilestone(name, date) {
     updateMilestones(prev => [...prev, {
       id: Date.now(), name: name || "Milepæl", date: date || td(), desc: "", color: "#F5C542"
     }]);
     setShowAddMs(false);
   }
-
   function updMs(id, field, value) {
     updateMilestones(prev => prev.map(m => m.id === id ? { ...m, [field]: value } : m));
   }
-
   function delMs(id) {
     updateMilestones(prev => prev.filter(m => m.id !== id));
     setSelMs(null);
   }
 
-  // Drag state
+  // Drag
   const dragRef = useRef({ dragId:null, overId:null, pos:null });
-
-  function handleDragStart(e, id) {
-    dragRef.current.dragId = id;
-    e.dataTransfer.effectAllowed = "move";
-  }
+  function handleDragStart(e, id) { dragRef.current.dragId = id; e.dataTransfer.effectAllowed = "move"; }
   function handleDragOver(e, id) {
     e.preventDefault();
     const r = e.currentTarget.getBoundingClientRect();
-    const pos = e.clientY < r.top + r.height/2 ? "top" : "bottom";
     dragRef.current.overId = id;
-    dragRef.current.pos = pos;
+    dragRef.current.pos = e.clientY < r.top + r.height/2 ? "top" : "bottom";
   }
   function handleDragEnd() {
     const { dragId, overId, pos } = dragRef.current;
@@ -344,7 +523,6 @@ export default function App() {
     dragRef.current = { dragId:null, overId:null, pos:null };
   }
 
-  // Gantt range
   function ganttRange() {
     const a = [];
     tasks.forEach(t => { if(t.start) a.push(t.start); if(t.end) a.push(t.end); });
@@ -355,7 +533,6 @@ export default function App() {
   }
   function daysArr(s, e) { const d = []; let c = s; while(c <= e) { d.push(c); c = addD(c,1); } return d; }
 
-  // Escape key
   useEffect(() => {
     const fn = e => {
       if (e.key === "Escape") {
@@ -368,21 +545,6 @@ export default function App() {
     return () => window.removeEventListener("keydown", fn);
   }, [showAddTask, showAddMs]);
 
-  // ============ LOADING ============
-  if (authLoading) return (
-    <div style={{ minHeight:"100vh", background:"#0F1117", display:"flex", alignItems:"center", justifyContent:"center" }}>
-      <style>{css}</style>
-      <div style={{ textAlign:"center" }}>
-        <div style={{ fontSize:32, fontFamily:"var(--font-mono)", fontWeight:700, color:"#FF6B35", animation:"pulse 1.5s infinite" }}>PM</div>
-        <div style={{ fontSize:12, color:"#6B7089", marginTop:8 }}>Indlæser...</div>
-      </div>
-    </div>
-  );
-
-  // ============ LOGIN ============
-  if (!user) return <LoginScreen onLogin={handleLogin} error={authError} loading={loginLoading} />;
-
-  // ============ STATS ============
   const tk = td();
   const tot = tasks.length;
   const don = tasks.filter(t => t.status === "Afsluttet").length;
@@ -390,7 +552,6 @@ export default function App() {
   const ov = tasks.filter(t => t.end < tk && t.status !== "Afsluttet").length;
   const selTaskObj = selTask != null ? tasks.find(t => t.id === selTask) : null;
   const selMsObj = selMs != null ? milestones.find(m => m.id === selMs) : null;
-
   const rng = ganttRange();
   const days = daysArr(rng.s, rng.e);
   const dw = 40;
@@ -404,7 +565,7 @@ export default function App() {
         <div style={{ position:"absolute", inset:0, background:"linear-gradient(135deg,rgba(255,107,53,0.04) 0%,transparent 50%,rgba(75,139,245,0.03) 100%)", pointerEvents:"none" }} />
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", position:"relative", zIndex:1, flexWrap:"wrap", gap:10 }}>
           <div style={{ display:"flex", alignItems:"center", gap:14 }}>
-            <div style={{ fontFamily:"var(--font-mono)", fontSize:10, fontWeight:700, letterSpacing:"0.2em", textTransform:"uppercase", color:"var(--accent)", background:"var(--accent-soft)", padding:"4px 10px", borderRadius:4 }}>PM</div>
+            <button className="btn btn-dark btn-sm" onClick={onBack} style={{ padding:"5px 10px" }}>← Projekter</button>
             <input value={projectName} onChange={e => updateProjectName(e.target.value)} spellCheck={false}
               style={{ background:"transparent", border:"none", color:"var(--text)", fontSize:20, fontWeight:600, letterSpacing:"-0.02em", outline:"none", fontFamily:"var(--font-display)", borderBottom:"1px dashed var(--border)", paddingBottom:2, width:280 }} />
           </div>
@@ -418,15 +579,10 @@ export default function App() {
                 {(user.email || "?")[0].toUpperCase()}
               </div>
               <span style={{ fontSize:11, color:"var(--text-muted)", maxWidth:120, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{user.email}</span>
-              <button className="btn btn-dark btn-sm" onClick={handleLogout}>Log ud</button>
+              <button className="btn btn-dark btn-sm" onClick={onLogout}>Log ud</button>
             </div>
           </div>
         </div>
-        {isDemo && (
-          <div style={{ marginTop:8, padding:"6px 12px", background:"rgba(245,197,66,0.1)", border:"1px solid rgba(245,197,66,0.2)", borderRadius:6, fontSize:11, color:"var(--yellow)", position:"relative", zIndex:1 }}>
-            ⚠ Demo-tilstand: Data gemmes kun lokalt. Indsæt din Firebase-config for at aktivere login og delt data.
-          </div>
-        )}
       </div>
 
       {/* TOOLBAR */}
