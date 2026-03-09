@@ -577,10 +577,10 @@ function ProjectView({ projectId, user, isDemo, projects, setProjects, onBack, o
     saveProject(null, null, name);
   }
 
-  function addTask(name, start, end, desc) {
+  function addTask(name, start, end, desc, owner) {
     updateTasks(prev => [...prev, {
       id: Date.now(), name: name || "Ny opgave", start: start || td(), end: end || addD(td(),7),
-      status: "Ikke startet", priority: "Normal", owner: "", desc: desc || "",
+      status: "Ikke startet", priority: "Normal", owner: owner || "", desc: desc || "",
       progress: 0, color: TC[tasks.length % TC.length], createdBy: user?.email || ""
     }]);
     setShowAddTask(false);
@@ -826,7 +826,7 @@ function ProjectView({ projectId, user, isDemo, projects, setProjects, onBack, o
 
         {/* DETAIL PANEL */}
         {selTaskObj && (
-          <DetailTask task={selTaskObj} onUpdate={updTask} onDelete={delTask} onClose={()=>setSelTask(null)} />
+          <DetailTask task={selTaskObj} members={members} onUpdate={updTask} onDelete={delTask} onClose={()=>setSelTask(null)} />
         )}
         {selMsObj && (
           <DetailMs ms={selMsObj} onUpdate={updMs} onDelete={delMs} onClose={()=>setSelMs(null)} />
@@ -834,7 +834,7 @@ function ProjectView({ projectId, user, isDemo, projects, setProjects, onBack, o
       </div>
 
       {/* MODALS */}
-      {showAddTask && <AddTaskModal onAdd={addTask} onClose={()=>setShowAddTask(false)} />}
+      {showAddTask && <AddTaskModal members={members} onAdd={addTask} onClose={()=>setShowAddTask(false)} />}
       {showAddMs && <AddMsModal onAdd={addMilestone} onClose={()=>setShowAddMs(false)} />}
       {showMembers && <MembersModal members={members} createdBy={createdBy} isOwner={isOwner} onAdd={addMember} onRemove={removeMember} onClose={() => setShowMembers(false)} />}
     </div>
@@ -903,7 +903,7 @@ function TimelineView({ tasks, milestones, onSelTask, onSelMs }) {
                 <div style={{ fontSize:14, fontWeight:600, marginBottom:2 }}>{t.name}</div>
                 <div style={{ fontSize:11, color:"var(--text-muted)", display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
                   <span style={{ background:ss.bg, color:ss.c, padding:"2px 8px", borderRadius:3, fontSize:10, fontWeight:600 }}>{t.status}</span>
-                  {t.owner && <span>· {t.owner}</span>}
+                  {t.owner && <span style={{ display:"inline-flex", alignItems:"center", gap:4 }}>· <span style={{ width:16, height:16, borderRadius:3, background:"var(--accent-soft)", display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:8, fontWeight:600, color:"var(--accent)" }}>{t.owner[0].toUpperCase()}</span> {t.owner}</span>}
                   <span>· {t.progress}%</span>
                 </div>
                 {wd > 0 && <div style={{ fontFamily:"var(--font-mono)", fontSize:10, color:"var(--text-dim)", marginTop:6, display:"flex", alignItems:"center", gap:5 }}>
@@ -947,7 +947,7 @@ function ListView({ tasks, tk, onSelTask }) {
                   <div style={{ width:4, height:32, borderRadius:2, background:t.color, flexShrink:0 }} />
                   <div style={{ flex:1, minWidth:0 }}>
                     <div style={{ fontWeight:600, fontSize:14, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{t.name}</div>
-                    <div style={{ fontSize:11, color:"var(--text-muted)" }}>{fmtDs(t.start)} → {fmtDs(t.end)}{t.owner && ` · ${t.owner}`}</div>
+                    <div style={{ fontSize:11, color:"var(--text-muted)", display:"flex", alignItems:"center", gap:4 }}>{fmtDs(t.start)} → {fmtDs(t.end)}{t.owner && <><span style={{ width:16, height:16, borderRadius:3, background:"var(--accent-soft)", display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:8, fontWeight:600, color:"var(--accent)", marginLeft:4 }}>{t.owner[0].toUpperCase()}</span> {t.owner}</>}</div>
                     {t.desc && <div style={{ fontSize:11, color:"var(--text-dim)", marginTop:3, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", maxWidth:300 }}>{t.desc}</div>}
                   </div>
                   <div style={{ display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>
@@ -968,16 +968,13 @@ function ListView({ tasks, tk, onSelTask }) {
   );
 }
 
-function DetailTask({ task: t, onUpdate, onDelete, onClose }) {
+function DetailTask({ task: t, members, onUpdate, onDelete, onClose }) {
   const ss = SS[t.status];
   const wd = weDays(t.start, t.end);
   const dur = t.start && t.end ? Math.max(1, Math.round((toD(t.end)-toD(t.start))/86400000)+1) : 0;
-  // Use local state for text fields to prevent cursor jumping
   const [name, setName] = useState(t.name);
   const [desc, setDesc] = useState(t.desc);
-  const [owner, setOwner] = useState(t.owner);
-  // Sync when a different task is selected
-  useEffect(() => { setName(t.name); setDesc(t.desc); setOwner(t.owner); }, [t.id]);
+  useEffect(() => { setName(t.name); setDesc(t.desc); }, [t.id]);
 
   return (
     <div style={{ width:460, minWidth:460, background:"var(--surface)", borderLeft:"1px solid var(--border)", overflowY:"auto", flexShrink:0, animation:"slideIn 0.2s ease" }}>
@@ -1016,8 +1013,17 @@ function DetailTask({ task: t, onUpdate, onDelete, onClose }) {
           <Field label="Startdato"><input type="date" className="fl-input" value={t.start} onChange={e=>onUpdate(t.id,"start",e.target.value)} /></Field>
           <Field label="Slutdato"><input type="date" className="fl-input" value={t.end} onChange={e=>onUpdate(t.id,"end",e.target.value)} /></Field>
         </div>
-        <Field label="Ansvarlig">
-          <input className="fl-input" value={owner} onChange={e=>{setOwner(e.target.value);onUpdate(t.id,"owner",e.target.value)}} placeholder="Hvem har opgaven?" />
+        <Field label="Tildelt til">
+          <select className="fl-select" value={t.owner} onChange={e=>onUpdate(t.id,"owner",e.target.value)}>
+            <option value="">Ikke tildelt</option>
+            {(members || []).map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+          {t.owner && (
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:6, padding:"6px 10px", background:"var(--surface2)", borderRadius:6 }}>
+              <div style={{ width:24, height:24, borderRadius:5, background:"var(--accent-soft)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:10, fontWeight:600, color:"var(--accent)" }}>{t.owner[0].toUpperCase()}</div>
+              <span style={{ fontSize:12, color:"var(--text)" }}>{t.owner}</span>
+            </div>
+          )}
         </Field>
         <Field label={<>Fremgang — <span style={{ color:"var(--accent)", fontFamily:"var(--font-mono)" }}>{t.progress}%</span></>}>
           <input type="range" min={0} max={100} step={5} value={t.progress} style={{ accentColor:t.color }} onChange={e=>onUpdate(t.id,"progress",parseInt(e.target.value))} />
@@ -1079,11 +1085,12 @@ function Field({ label, children }) {
   );
 }
 
-function AddTaskModal({ onAdd, onClose }) {
+function AddTaskModal({ members, onAdd, onClose }) {
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
   const [start, setStart] = useState(td());
   const [end, setEnd] = useState(addD(td(),7));
+  const [owner, setOwner] = useState("");
   const ref = useRef(null);
   useEffect(() => { ref.current?.focus(); }, []);
 
@@ -1091,15 +1098,21 @@ function AddTaskModal({ onAdd, onClose }) {
     <div onClick={e => e.target === e.currentTarget && onClose()} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:200 }}>
       <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12, padding:24, width:460, maxWidth:"90vw", boxShadow:"0 4px 24px rgba(0,0,0,0.3)", animation:"slideUp 0.2s ease" }}>
         <div style={{ fontSize:18, fontWeight:600, marginBottom:16 }}>Ny opgave</div>
-        <Field label="Opgavenavn"><input ref={ref} className="fl-input" value={name} onChange={e=>setName(e.target.value)} placeholder="Hvad skal laves?" onKeyDown={e=>e.key==="Enter"&&onAdd(name,start,end,desc)} /></Field>
+        <Field label="Opgavenavn"><input ref={ref} className="fl-input" value={name} onChange={e=>setName(e.target.value)} placeholder="Hvad skal laves?" onKeyDown={e=>e.key==="Enter"&&onAdd(name,start,end,desc,owner)} /></Field>
         <Field label="Kort beskrivelse"><textarea className="fl-textarea" value={desc} onChange={e=>setDesc(e.target.value)} placeholder="Beskriv opgaven..." rows={2} /></Field>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:16 }}>
           <Field label="Start"><input type="date" className="fl-input" value={start} onChange={e=>setStart(e.target.value)} /></Field>
           <Field label="Slut"><input type="date" className="fl-input" value={end} onChange={e=>setEnd(e.target.value)} /></Field>
         </div>
+        <Field label="Tildel til">
+          <select className="fl-select" value={owner} onChange={e=>setOwner(e.target.value)}>
+            <option value="">Ikke tildelt</option>
+            {(members || []).map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </Field>
         <div style={{ display:"flex", gap:8, justifyContent:"flex-end" }}>
           <button className="btn btn-dark" onClick={onClose}>Annuller</button>
-          <button className="btn btn-accent" onClick={()=>onAdd(name,start,end,desc)}>Tilføj</button>
+          <button className="btn btn-accent" onClick={()=>onAdd(name,start,end,desc,owner)}>Tilføj</button>
         </div>
       </div>
     </div>
