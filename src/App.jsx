@@ -244,6 +244,7 @@ export default function App() {
       projectName: name || "Nyt Projekt",
       tasks: [],
       milestones: [],
+      members: [user?.email],
       createdAt: new Date().toISOString(),
       createdBy: user?.email || "",
       updatedAt: new Date().toISOString(),
@@ -328,24 +329,36 @@ export default function App() {
         </button>
 
         {/* Project cards */}
-        {projects.length === 0 ? (
+        {projects.filter(p => !p.members || p.members.includes(user?.email)).length === 0 ? (
           <Empty icon="📁" title="Ingen projekter endnu" sub="Opret dit første projekt for at komme i gang" />
         ) : (
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(280px, 1fr))", gap:12 }}>
-            {projects.map(p => {
+            {projects.filter(p => !p.members || p.members.includes(user?.email)).map(p => {
               const taskCount = (p.tasks || []).length;
               const doneCount = (p.tasks || []).filter(t => t.status === "Afsluttet").length;
               const msCount = (p.milestones || []).length;
+              const memberCount = (p.members || []).length;
               const pct = taskCount > 0 ? Math.round(doneCount / taskCount * 100) : 0;
+              const isOwner = p.createdBy === user?.email;
               return (
                 <div key={p.id} onClick={() => setActiveProjectId(p.id)}
                   style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12, padding:20, cursor:"pointer", transition:"all 0.15s", position:"relative" }}
                   onMouseEnter={e => e.currentTarget.style.borderColor = "var(--border-light)"}
                   onMouseLeave={e => e.currentTarget.style.borderColor = "var(--border)"}>
-                  <div style={{ fontSize:16, fontWeight:600, marginBottom:6 }}>{p.projectName || "Uden navn"}</div>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+                    <div style={{ fontSize:16, fontWeight:600, flex:1 }}>{p.projectName || "Uden navn"}</div>
+                    {memberCount > 1 && (
+                      <div style={{ display:"flex", alignItems:"center", gap:3 }}>
+                        {(p.members || []).slice(0, 3).map((m, i) => (
+                          <div key={i} style={{ width:22, height:22, borderRadius:5, background:"var(--surface3)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:600, color:"var(--text-muted)", marginLeft: i > 0 ? -6 : 0, border:"2px solid var(--surface)", position:"relative", zIndex:3-i }}>{m[0].toUpperCase()}</div>
+                        ))}
+                        {memberCount > 3 && <span style={{ fontSize:9, color:"var(--text-dim)", marginLeft:2 }}>+{memberCount-3}</span>}
+                      </div>
+                    )}
+                  </div>
                   <div style={{ fontSize:11, color:"var(--text-muted)", marginBottom:12 }}>
                     {taskCount} opgave{taskCount !== 1 ? "r" : ""} · {msCount} milepæl{msCount !== 1 ? "e" : ""}
-                    {p.createdBy && <> · af {p.createdBy}</>}
+                    · {memberCount} medlem{memberCount !== 1 ? "mer" : ""}
                   </div>
                   {taskCount > 0 && (
                     <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
@@ -359,7 +372,7 @@ export default function App() {
                     Opdateret {p.updatedAt ? new Date(p.updatedAt).toLocaleDateString("da-DK") : "—"}
                   </div>
                   <button className="btn btn-danger btn-sm" onClick={e => { e.stopPropagation(); if(confirm("Slet dette projekt?")) deleteProject(p.id); }}
-                    style={{ position:"absolute", top:12, right:12, fontSize:10, padding:"2px 8px" }}>✕</button>
+                    style={{ position:"absolute", top:12, right:12, fontSize:10, padding:"2px 8px", display: isOwner ? "block" : "none" }}>✕</button>
                 </div>
               );
             })}
@@ -398,17 +411,82 @@ function NewProjectModal({ onCreate, onClose }) {
 }
 
 // ============================================================
+// MEMBERS MODAL
+// ============================================================
+function MembersModal({ members, createdBy, isOwner, onAdd, onRemove, onClose }) {
+  const [newEmail, setNewEmail] = useState("");
+  const ref = useRef(null);
+
+  function handleAdd() {
+    if (newEmail.trim()) { onAdd(newEmail.trim()); setNewEmail(""); ref.current?.focus(); }
+  }
+
+  return (
+    <div onClick={e => e.target === e.currentTarget && onClose()} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:200 }}>
+      <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12, padding:24, width:440, maxWidth:"90vw", boxShadow:"0 4px 24px rgba(0,0,0,0.3)", animation:"slideUp 0.2s ease" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
+          <div style={{ fontSize:18, fontWeight:600 }}>Projektmedlemmer</div>
+          <button className="btn btn-dark btn-sm" onClick={onClose}>✕</button>
+        </div>
+
+        {/* Member list */}
+        <div style={{ marginBottom:16 }}>
+          {members.map(email => (
+            <div key={email} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 0", borderBottom:"1px solid var(--border)" }}>
+              <div style={{ width:32, height:32, borderRadius:6, background: email === createdBy ? "var(--accent-soft)" : "var(--surface3)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, fontWeight:600, color: email === createdBy ? "var(--accent)" : "var(--text-muted)", flexShrink:0 }}>
+                {email[0].toUpperCase()}
+              </div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:13, fontWeight:500, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{email}</div>
+                {email === createdBy && <div style={{ fontSize:10, color:"var(--accent)", fontFamily:"var(--font-mono)" }}>EJER</div>}
+              </div>
+              {isOwner && email !== createdBy && (
+                <button className="btn btn-danger btn-sm" onClick={() => onRemove(email)} style={{ fontSize:10, padding:"2px 8px" }}>Fjern</button>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Add member */}
+        {isOwner && (
+          <div>
+            <div style={{ fontSize:10, fontWeight:600, letterSpacing:"0.1em", textTransform:"uppercase", color:"var(--text-muted)", marginBottom:5 }}>Tilføj medlem</div>
+            <div style={{ display:"flex", gap:8 }}>
+              <input ref={ref} className="fl-input" type="email" value={newEmail} onChange={e => setNewEmail(e.target.value)}
+                placeholder="bruger@email.dk" onKeyDown={e => e.key === "Enter" && handleAdd()} style={{ flex:1 }} />
+              <button className="btn btn-accent" onClick={handleAdd}>Tilføj</button>
+            </div>
+            <div style={{ fontSize:10, color:"var(--text-dim)", marginTop:6 }}>
+              Brugeren skal have en konto i systemet (oprettet i Firebase Authentication)
+            </div>
+          </div>
+        )}
+
+        {!isOwner && (
+          <div style={{ fontSize:11, color:"var(--text-dim)", textAlign:"center", padding:"8px 0" }}>
+            Kun projektejeren kan tilføje og fjerne medlemmer
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
 // PROJECT VIEW — Single project (existing logic)
 // ============================================================
 function ProjectView({ projectId, user, isDemo, projects, setProjects, onBack, onLogout }) {
   const [projectName, setProjectName] = useState("Nyt Projekt");
   const [tasks, setTasks] = useState([]);
   const [milestones, setMilestones] = useState([]);
+  const [members, setMembers] = useState([]);
+  const [createdBy, setCreatedBy] = useState("");
   const [view, setView] = useState("gantt");
   const [selTask, setSelTask] = useState(null);
   const [selMs, setSelMs] = useState(null);
   const [showAddTask, setShowAddTask] = useState(false);
   const [showAddMs, setShowAddMs] = useState(false);
+  const [showMembers, setShowMembers] = useState(false);
 
   // Load project data
   useEffect(() => {
@@ -418,6 +496,8 @@ function ProjectView({ projectId, user, isDemo, projects, setProjects, onBack, o
         setProjectName(p.projectName || "Nyt Projekt");
         setTasks(p.tasks || []);
         setMilestones(p.milestones || []);
+        setMembers(p.members || []);
+        setCreatedBy(p.createdBy || "");
       }
       return;
     }
@@ -428,6 +508,8 @@ function ProjectView({ projectId, user, isDemo, projects, setProjects, onBack, o
         setProjectName(data.projectName || "Nyt Projekt");
         setTasks(data.tasks || []);
         setMilestones(data.milestones || []);
+        setMembers(data.members || []);
+        setCreatedBy(data.createdBy || "");
       }
     });
     return () => unsub();
@@ -449,6 +531,32 @@ function ProjectView({ projectId, user, isDemo, projects, setProjects, onBack, o
       await setDoc(ref, data, { merge: true });
     }
   }
+
+  async function addMember(email) {
+    if (!email || members.includes(email)) return;
+    const newMembers = [...members, email.toLowerCase().trim()];
+    setMembers(newMembers);
+    if (isDemo) {
+      setProjects(prev => prev.map(p => p.id === projectId ? { ...p, members: newMembers } : p));
+    } else {
+      const ref = doc(fbDb, "projects", projectId);
+      await setDoc(ref, { members: newMembers }, { merge: true });
+    }
+  }
+
+  async function removeMember(email) {
+    if (email === createdBy) return; // can't remove owner
+    const newMembers = members.filter(m => m !== email);
+    setMembers(newMembers);
+    if (isDemo) {
+      setProjects(prev => prev.map(p => p.id === projectId ? { ...p, members: newMembers } : p));
+    } else {
+      const ref = doc(fbDb, "projects", projectId);
+      await setDoc(ref, { members: newMembers }, { merge: true });
+    }
+  }
+
+  const isOwner = createdBy === user?.email;
 
   function updateTasks(fn) {
     setTasks(prev => {
@@ -573,6 +681,15 @@ function ProjectView({ projectId, user, isDemo, projects, setProjects, onBack, o
             <button className={`btn btn-dark ${view==="gantt"?"active":""}`} onClick={()=>{setView("gantt");setSelTask(null);setSelMs(null)}}>◧ Gantt</button>
             <button className={`btn btn-dark ${view==="timeline"?"active":""}`} onClick={()=>{setView("timeline");setSelTask(null);setSelMs(null)}}>▤ Tidslinje</button>
             <button className={`btn btn-dark ${view==="list"?"active":""}`} onClick={()=>{setView("list");setSelTask(null);setSelMs(null)}}>☰ Opgaver</button>
+            <div style={{ width:1, height:24, background:"var(--border)", margin:"0 4px" }} />
+            <button className="btn btn-dark btn-sm" onClick={() => setShowMembers(true)} style={{ display:"flex", alignItems:"center", gap:6 }}>
+              <div style={{ display:"flex" }}>
+                {members.slice(0, 3).map((m, i) => (
+                  <div key={i} style={{ width:20, height:20, borderRadius:4, background: m === createdBy ? "var(--accent-soft)" : "var(--surface3)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:8, fontWeight:600, color: m === createdBy ? "var(--accent)" : "var(--text-muted)", marginLeft: i > 0 ? -4 : 0, border:"1.5px solid var(--surface)", position:"relative", zIndex:3-i }}>{m[0].toUpperCase()}</div>
+                ))}
+              </div>
+              {members.length} medlem{members.length !== 1 ? "mer" : ""}
+            </button>
             <div style={{ width:1, height:24, background:"var(--border)", margin:"0 4px" }} />
             <div style={{ display:"flex", alignItems:"center", gap:8 }}>
               <div style={{ width:28, height:28, borderRadius:6, background:"var(--surface3)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:600, color:"var(--accent)" }}>
@@ -719,6 +836,7 @@ function ProjectView({ projectId, user, isDemo, projects, setProjects, onBack, o
       {/* MODALS */}
       {showAddTask && <AddTaskModal onAdd={addTask} onClose={()=>setShowAddTask(false)} />}
       {showAddMs && <AddMsModal onAdd={addMilestone} onClose={()=>setShowAddMs(false)} />}
+      {showMembers && <MembersModal members={members} createdBy={createdBy} isOwner={isOwner} onAdd={addMember} onRemove={removeMember} onClose={() => setShowMembers(false)} />}
     </div>
   );
 }
